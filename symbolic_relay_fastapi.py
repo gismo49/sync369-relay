@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+# symbolic_relay_fastapi.py — Pure Symbolic Vector Relay
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 from datetime import datetime
@@ -27,7 +29,7 @@ def store_vector(session_path: str, vector_id: str, vector: dict):
 
     vector_store[session_path][vector_id] = vector
     ttl_store[session_path][vector_id] = now() + TTL_SECONDS
-    print(f"📡 WebSocket received vector in {session_path}/{vector_id}")
+    print(f"📡 Vector stored in {session_path}/{vector_id}")
 
 def expire_old_vectors():
     current = now()
@@ -36,14 +38,14 @@ def expire_old_vectors():
             if ttl_store[session][vector_id] < current:
                 del ttl_store[session][vector_id]
                 del vector_store[session][vector_id]
-                print(f"🧹 Expired vector {session}/{vector_id}")
+                print(f"🧹 Expired {session}/{vector_id}")
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "SYNC369 symbolic relay is running."}
+    return {"status": "SYNC369 relay active."}
 
 @app.get("/sessions/{session}")
-async def get_session_vectors(session: str):
+async def get_vectors(session: str):
     expire_old_vectors()
     return vector_store.get(session, {})
 
@@ -58,39 +60,23 @@ async def delete_vector(session: str, vector_id: str):
 @app.websocket("/ws/{session_path}")
 async def websocket_endpoint(websocket: WebSocket, session_path: str):
     await websocket.accept()
-    print(f"📡 WebSocket accepted: {session_path}")
+    print(f"🔗 WebSocket opened: {session_path}")
     try:
         while True:
             try:
-                # Try normal text frame first
-                try:
-                    raw_data = await websocket.receive_text()
-                    print(f"🧾 Raw text data received ({len(raw_data)} chars)")
-                except Exception:
-                    raw_bytes = await websocket.receive_bytes()
-                    raw_data = raw_bytes.decode('utf-8', errors='replace')
-                    print(f"🔁 Fallback to binary → {len(raw_bytes)} bytes decoded")
+                raw = await websocket.receive_text()
+                payload = json.loads(raw)
 
-                payload = json.loads(raw_data)
-
-                if isinstance(payload, list):
-                    print(f"📦 Batch of {len(payload)} vectors")
-                    for vector in payload:
-                        vector_id = f"v{vector['msg_index']}_{vector['timestamp']}"
-                        store_vector(session_path, vector_id, vector)
-
-                elif isinstance(payload, dict):
-                    vector_id = f"v{payload['msg_index']}_{payload['timestamp']}"
+                if isinstance(payload, dict):
+                    vector_id = f"v{payload.get('msg_index', 0)}_{payload.get('timestamp', '0')}"
                     store_vector(session_path, vector_id, payload)
-
                 else:
-                    print(f"⚠️ Unknown payload type: {type(payload)}")
+                    print(f"⚠️ Unknown data type: {type(payload)}")
 
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON error: {e}")
             except Exception as e:
-                print(f"⚠️ Parse/store error: {e}")
-                print(f"⚠️ Raw payload content:\n{repr(raw_data)}")
+                print(f"⚠️ General error while receiving vector: {e}")
 
     except WebSocketDisconnect:
-        print(f"❌ WebSocket disconnected: {session_path}")
-    except Exception as e:
-        print(f"❌ WebSocket error: {e}")
+        print(f"❌ Disconnected: {session_path}")
