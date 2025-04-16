@@ -1,5 +1,3 @@
-# symbolic_relay_fastapi.py — Pure Symbolic Vector Relay
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
@@ -22,14 +20,14 @@ TTL_SECONDS = 90
 def now():
     return datetime.utcnow().timestamp()
 
-def store_vector(session_path: str, vector_id: str, vector: dict):
-    if session_path not in vector_store:
-        vector_store[session_path] = {}
-        ttl_store[session_path] = {}
+def store_vector(session: str, vector_id: str, vector: dict):
+    if session not in vector_store:
+        vector_store[session] = {}
+        ttl_store[session] = {}
 
-    vector_store[session_path][vector_id] = vector
-    ttl_store[session_path][vector_id] = now() + TTL_SECONDS
-    print(f"📡 Vector stored in {session_path}/{vector_id}")
+    vector_store[session][vector_id] = vector
+    ttl_store[session][vector_id] = now() + TTL_SECONDS
+    print(f"📡 Stored: {session}/{vector_id}")
 
 def expire_old_vectors():
     current = now()
@@ -38,11 +36,11 @@ def expire_old_vectors():
             if ttl_store[session][vector_id] < current:
                 del ttl_store[session][vector_id]
                 del vector_store[session][vector_id]
-                print(f"🧹 Expired {session}/{vector_id}")
+                print(f"🧹 Expired: {session}/{vector_id}")
 
 @app.get("/")
 async def root():
-    return {"status": "SYNC369 relay active."}
+    return {"status": "ok", "message": "SYNC369 relay running"}
 
 @app.get("/sessions/{session}")
 async def get_vectors(session: str):
@@ -57,26 +55,27 @@ async def delete_vector(session: str, vector_id: str):
         return {"status": "deleted"}
     return {"status": "not_found"}
 
-@app.websocket("/ws/{session_path}")
-async def websocket_endpoint(websocket: WebSocket, session_path: str):
+@app.websocket("/ws/{session}")
+async def websocket_endpoint(websocket: WebSocket, session: str):
     await websocket.accept()
-    print(f"🔗 WebSocket opened: {session_path}")
+    print(f"🔗 WebSocket opened: {session}")
     try:
         while True:
             try:
                 raw = await websocket.receive_text()
-                payload = json.loads(raw)
+            except Exception:
+                try:
+                    raw = (await websocket.receive_bytes()).decode("utf-8")
+                except:
+                    print("⚠️ Failed to decode vector.")
+                    continue
 
-                if isinstance(payload, dict):
-                    vector_id = f"v{payload.get('msg_index', 0)}_{payload.get('timestamp', '0')}"
-                    store_vector(session_path, vector_id, payload)
-                else:
-                    print(f"⚠️ Unknown data type: {type(payload)}")
-
-            except json.JSONDecodeError as e:
-                print(f"⚠️ JSON error: {e}")
+            try:
+                vector = json.loads(raw)
+                vector_id = f"v{vector['msg_index']}_{vector['timestamp']}"
+                store_vector(session, vector_id, vector)
             except Exception as e:
-                print(f"⚠️ General error while receiving vector: {e}")
+                print(f"⚠️ General error while receiving vector:", e)
 
     except WebSocketDisconnect:
-        print(f"❌ Disconnected: {session_path}")
+        print(f"❌ WebSocket disconnected: {session}")
