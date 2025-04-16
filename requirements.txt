@@ -1,2 +1,5 @@
 fastapi
-uvicorn(standard)
+uvicorn
+websockets
+httptools
+wsproto
