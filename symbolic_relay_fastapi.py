@@ -1,10 +1,10 @@
-# symbolic_relay_fastapi.py — RELAY + WebSocket support
+# symbolic_relay_fastapi.py — FINAL + WebSocket Broadcast
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
 from datetime import datetime
-import asyncio
+import json
 
 print("🚀 RELAY IS LIVE AND RUNNING THIS EXACT FILE ✅")
 
@@ -19,7 +19,7 @@ app.add_middleware(
 
 vector_store: Dict[str, Dict[str, Dict[str, Any]]] = {}
 ttl_tracker: Dict[str, Dict[str, float]] = {}
-active_websockets: Dict[str, List[WebSocket]] = {}
+relay_channels: Dict[str, List[WebSocket]] = {}
 TTL_SECONDS = 90
 
 def now():
@@ -49,14 +49,6 @@ async def post_vector(session: str, vector_id: str, request: Request):
     vector_store[session][vector_id] = data
     ttl_tracker[session][vector_id] = now() + TTL_SECONDS
     print(f"📥 Stored vector {session}/{vector_id} → {data}")
-
-    # Broadcast to WebSocket listeners
-    for ws in active_websockets.get(session, []):
-        try:
-            await ws.send_json({vector_id: data})
-        except Exception as e:
-            print(f"⚠️ WS broadcast error: {e}")
-
     return {"status": "ok"}
 
 @app.get("/sessions/{session}")
@@ -76,21 +68,38 @@ async def delete_vector(session: str, vector_id: str):
     raise HTTPException(status_code=404, detail="Vector not found")
 
 @app.websocket("/ws/{session}")
-async def websocket_session(session: str, websocket: WebSocket):
+async def websocket_relay(websocket: WebSocket, session: str):
     await websocket.accept()
-    print(f"🔌 WS connected: {session}")
+    print(f"🧠 WebSocket connected: {session}")
 
-    if session not in active_websockets:
-        active_websockets[session] = []
-    active_websockets[session].append(websocket)
+    if session not in relay_channels:
+        relay_channels[session] = []
+    relay_channels[session].append(websocket)
 
     try:
         while True:
-            await websocket.receive_text()  # Keep alive
+            data = await websocket.receive_text()
+            vector = json.loads(data)
+            vid = vector.get("msg_id") or f"v{int(time.time()*1e6)}"
+
+            if session not in vector_store:
+                vector_store[session] = {}
+                ttl_tracker[session] = {}
+
+            vector_store[session][vid] = vector
+            ttl_tracker[session][vid] = now() + TTL_SECONDS
+            print(f"📡 WebSocket received vector in {session}/{vid} → {vector}")
+
+            for peer in relay_channels[session]:
+                if peer != websocket:
+                    await peer.send_text(data)
+
     except WebSocketDisconnect:
-        print(f"❌ WS disconnected: {session}")
-        active_websockets[session].remove(websocket)
+        print(f"⚡ WebSocket disconnected: {session}")
+        relay_channels[session].remove(websocket)
+        if not relay_channels[session]:
+            del relay_channels[session]
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
